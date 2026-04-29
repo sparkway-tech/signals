@@ -1,0 +1,11 @@
+node_modules
+dist
+.env
+.env.local
+.env.production.local
+.env.development.local
+.vercel
+.DS_Store
+*.log
+.cache
+.tsbuildinfo

@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Sparkway Signals</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          forest: { DEFAULT: '#1F3A2E', light: '#2D4F3F' },
+          porcelain: { DEFAULT: '#F5F1EA', dark: '#EAE3D6' },
+          ink: { DEFAULT: '#1A1A1A', soft: '#5A5A5A' },
+          sage: '#7BA589',
+          bordeaux: '#7A2E2E',
+          sand: '#D4C4A8',
+          warmgray: '#A8A29A',
+        },
+        fontFamily: {
+          serif: ['Fraunces', 'ui-serif', 'Georgia', 'serif'],
+          sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        },
+      }
+    }
+  };
+</script>
+<style>
+  :root {
+    --forest: #1F3A2E;
+    --forest-light: #2D4F3F;
+    --porcelain: #F5F1EA;
+    --porcelain-dark: #EAE3D6;
+    --ink: #1A1A1A;
+    --ink-soft: #5A5A5A;
+    --sage: #7BA589;
+    --bordeaux: #7A2E2E;
+    --sand: #D4C4A8;
+    --warmgray: #A8A29A;
+  }
+  html, body { font-family: 'Inter', ui-sans-serif, system-ui, sans-serif; background: var(--porcelain); color: var(--ink); }
+  * { -webkit-font-smoothing: antialiased; }
+  .font-serif { font-family: 'Fraunces', ui-serif, Georgia, serif; font-optical-sizing: auto; }
+  .blur-name { filter: blur(5px); user-select: none; }
+  .hairline { border-color: rgba(26,26,26,0.10); }
+  .hairline-strong { border-color: rgba(26,26,26,0.18); }
+  /* Card surfaces — distinct from porcelain bg */
+  .surface { background: #FCFAF6; }
+  .surface-raised { background: #FFFFFF; box-shadow: 0 1px 2px rgba(26,26,26,0.04), 0 4px 16px -8px rgba(26,26,26,0.08); }
+  .surface-sage { background: rgba(123,165,137,0.10); border-color: rgba(123,165,137,0.30) !important; }
+  .surface-sage-strong { background: rgba(123,165,137,0.16); border-color: rgba(123,165,137,0.40) !important; }
+  /* Custom focus ring */
+  .focus-forest:focus { outline: none; box-shadow: 0 0 0 3px rgba(31,58,46,0.25); }
+  /* Subtle paper texture via inline radial */
+  body::before {
+    content: ""; position: fixed; inset: 0; pointer-events: none;
+    background:
+      radial-gradient(1200px 600px at 10% -10%, rgba(123,165,137,0.06), transparent 60%),
+      radial-gradient(900px 500px at 110% 110%, rgba(212,196,168,0.10), transparent 60%);
+    z-index: 0;
+  }
+  #root { position: relative; z-index: 1; }
+</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" src="data.jsx"></script>
+<script type="text/babel" src="ui.jsx"></script>
+<script type="text/babel" src="screen-onboarding.jsx"></script>
+<script type="text/babel" src="screen-search.jsx"></script>
+<script type="text/babel" src="screen-results.jsx"></script>
+<script type="text/babel" src="screen-company.jsx"></script>
+<script type="text/babel" src="screen-billing.jsx"></script>
+<script type="text/babel" src="screen-profile.jsx"></script>
+<script type="text/babel" src="app.jsx"></script>
+</body>
+</html>

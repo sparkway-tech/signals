@@ -1,0 +1,62 @@
+{
+  "name": "sparkway-signals",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -n api,web -c green,cyan \"npm run dev:api\" \"npm run dev:web\"",
+    "dev:api": "tsx watch server/index.ts",
+    "dev:web": "vite",
+    "build": "npm run build:web && npm run build:api",
+    "build:web": "vite build",
+    "build:api": "esbuild server/vercel-handler.ts --bundle --platform=node --format=esm --target=node20 --outfile=api/index.mjs --packages=external",
+    "start": "node api/index.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --ext .ts,.tsx",
+    "format": "prettier --write \"**/*.{ts,tsx,json,md}\"",
+    "db:generate": "drizzle-kit generate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.30.1",
+    "@neondatabase/serverless": "^0.10.4",
+    "@tanstack/react-query": "^5.62.0",
+    "cookie-parser": "^1.4.7",
+    "drizzle-orm": "^0.36.4",
+    "drizzle-zod": "^0.5.1",
+    "express": "^4.21.1",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.28.0",
+    "resend": "^4.0.1",
+    "stripe": "^17.4.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0-beta.7",
+    "@types/cookie-parser": "^1.4.8",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.1",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.1.0",
+    "drizzle-kit": "^0.28.1",
+    "esbuild": "^0.24.0",
+    "eslint": "^9.16.0",
+    "prettier": "^3.4.2",
+    "tailwindcss": "^4.0.0-beta.7",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3",
+    "vitest": "^2.1.8"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
