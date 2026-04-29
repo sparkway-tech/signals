@@ -1,4 +1,4 @@
-# SIGNALS_SPARKWAY.md
+# claude.md
 
 Document d'implémentation pour Claude Code. À placer à la racine du repo `sparkway-signals` comme `CLAUDE.md` ou conservé séparément en référence.
 
