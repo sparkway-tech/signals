@@ -396,11 +396,96 @@ router3.get("/", requireAuth, async (req, res) => {
 });
 var me_default = router3;
 
+// server/lib/migrations.ts
+import { sql as sql3 } from "drizzle-orm";
+var CURRENT_SCHEMA_VERSION = 1;
+var migrationsRan = false;
+async function runStartupMigrations() {
+  if (migrationsRan) return;
+  migrationsRan = true;
+  await db.execute(sql3`
+    CREATE TABLE IF NOT EXISTS "schema_version" (
+      "id" integer PRIMARY KEY,
+      "version" integer NOT NULL DEFAULT 0,
+      "updated_at" timestamp NOT NULL DEFAULT now()
+    )
+  `);
+  await db.execute(sql3`INSERT INTO "schema_version" ("id", "version") VALUES (1, 0) ON CONFLICT ("id") DO NOTHING`);
+  const versionRows = await db.execute(
+    sql3`SELECT version FROM "schema_version" WHERE id = 1`
+  );
+  const currentVersion = versionRows.rows?.[0]?.version ?? 0;
+  if (currentVersion >= CURRENT_SCHEMA_VERSION) {
+    return;
+  }
+  console.log(`[startup-migrations] Schema v${currentVersion} \u2192 v${CURRENT_SCHEMA_VERSION}, running migrations...`);
+  const t0 = Date.now();
+  await db.execute(sql3`
+    CREATE TABLE IF NOT EXISTS "users" (
+      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      "email" text NOT NULL UNIQUE,
+      "created_at" timestamptz NOT NULL DEFAULT now(),
+      "last_login_at" timestamptz,
+      "onboarding_completed" boolean NOT NULL DEFAULT false,
+      "sectors" jsonb NOT NULL DEFAULT '[]'::jsonb,
+      "functions" jsonb NOT NULL DEFAULT '[]'::jsonb,
+      "regions" jsonb NOT NULL DEFAULT '[]'::jsonb,
+      "credits_balance" integer NOT NULL DEFAULT 0
+    )
+  `);
+  await db.execute(sql3`
+    CREATE TABLE IF NOT EXISTS "magic_link_tokens" (
+      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      "user_id" uuid NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+      "token_hash" text NOT NULL UNIQUE,
+      "expires_at" timestamptz NOT NULL,
+      "used_at" timestamptz,
+      "created_at" timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await db.execute(sql3`CREATE INDEX IF NOT EXISTS "magic_link_tokens_user_id_idx" ON "magic_link_tokens" ("user_id")`);
+  await db.execute(sql3`
+    CREATE TABLE IF NOT EXISTS "credit_transactions" (
+      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      "user_id" uuid NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+      "type" text NOT NULL,
+      "amount" integer NOT NULL,
+      "balance_after" integer NOT NULL,
+      "stripe_session_id" text UNIQUE,
+      "stripe_payment_intent" text,
+      "pack_type" text,
+      "amount_eur" integer,
+      "unlocked_company_id" uuid,
+      "description" text,
+      "created_at" timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await db.execute(sql3`CREATE INDEX IF NOT EXISTS "credit_transactions_user_id_idx" ON "credit_transactions" ("user_id", "created_at" DESC)`);
+  await db.execute(sql3`UPDATE "schema_version" SET version = ${CURRENT_SCHEMA_VERSION}, updated_at = NOW() WHERE id = 1`);
+  console.log(`[startup-migrations] Completed v${CURRENT_SCHEMA_VERSION} in ${Date.now() - t0}ms`);
+}
+
 // server/index.ts
 var app = express();
 var PORT = Number(process.env.PORT ?? 3e3);
 app.use(express.json({ limit: "1mb" }));
 app.use(cookieParser());
+var migrationsPromise = null;
+app.use(async (_req, _res, next) => {
+  if (!migrationsPromise) {
+    migrationsPromise = runStartupMigrations().catch((err) => {
+      console.error("[startup-migrations] failed:", err);
+      migrationsPromise = null;
+      throw err;
+    });
+  }
+  try {
+    await migrationsPromise;
+    next();
+  } catch (err) {
+    next(err);
+  }
+});
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, ts: (/* @__PURE__ */ new Date()).toISOString() });
 });
