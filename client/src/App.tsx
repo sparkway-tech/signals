@@ -1,23 +1,37 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Login } from "@/pages/Login";
 import { Onboarding } from "@/pages/Onboarding";
-import { SearchPlaceholder } from "@/pages/SearchPlaceholder";
+import { Search } from "@/pages/Search";
+import { Results } from "@/pages/Results";
+import { CompanyDetail } from "@/pages/Company";
+import { Profile } from "@/pages/Profile";
+import { BillingModal } from "@/components/BillingModal";
+import { SessionProvider } from "@/lib/session-context";
+import { BillingProvider } from "@/lib/billing-context";
 
 /**
  * App router.
- * Semaine 1 : login + onboarding + recherche placeholder.
- * Semaine 3+ : results, company, billing, profile (cf SIGNALS_SPARKWAY.md §8.6).
+ * SessionProvider fetch /api/me et expose user + creditsBalance globalement.
+ * BillingProvider gère l'overlay du paywall (ouvert depuis n'importe quel écran).
  */
 export function App() {
   return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/auth/login" element={<Login />} />
-        <Route path="/onboarding" element={<Onboarding />} />
-        <Route path="/recherche" element={<SearchPlaceholder />} />
-        <Route path="/" element={<Navigate to="/auth/login" replace />} />
-        <Route path="*" element={<Navigate to="/auth/login" replace />} />
-      </Routes>
+      <SessionProvider>
+        <BillingProvider>
+          <Routes>
+            <Route path="/auth/login" element={<Login />} />
+            <Route path="/onboarding" element={<Onboarding />} />
+            <Route path="/recherche" element={<Search />} />
+            <Route path="/recherches/:searchId" element={<Results />} />
+            <Route path="/boites/:companyId" element={<CompanyDetail />} />
+            <Route path="/profil" element={<Profile />} />
+            <Route path="/" element={<Navigate to="/recherche" replace />} />
+            <Route path="*" element={<Navigate to="/auth/login" replace />} />
+          </Routes>
+          <BillingModal />
+        </BillingProvider>
+      </SessionProvider>
     </BrowserRouter>
   );
 }

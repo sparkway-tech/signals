@@ -5,6 +5,7 @@ import {
   creditTransactions,
   users,
   companies,
+  companyScores,
   type UnlockedCompany,
 } from "@shared/schema";
 
@@ -84,9 +85,11 @@ export async function listUnlockedByUser(userId: string, limit = 20) {
       unlock: unlockedCompanies,
       companyName: companies.name,
       companyId: companies.id,
+      score: companyScores.score,
     })
     .from(unlockedCompanies)
     .innerJoin(companies, eq(companies.id, unlockedCompanies.companyId))
+    .leftJoin(companyScores, eq(companyScores.companyId, companies.id))
     .where(eq(unlockedCompanies.userId, userId))
     .orderBy(desc(unlockedCompanies.unlockedAt))
     .limit(limit);
