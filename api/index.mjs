@@ -714,8 +714,9 @@ async function listUnlockedByUser(userId, limit = 20) {
   return db.select({
     unlock: unlockedCompanies,
     companyName: companies.name,
-    companyId: companies.id
-  }).from(unlockedCompanies).innerJoin(companies, eq3(companies.id, unlockedCompanies.companyId)).where(eq3(unlockedCompanies.userId, userId)).orderBy(desc(unlockedCompanies.unlockedAt)).limit(limit);
+    companyId: companies.id,
+    score: companyScores.score
+  }).from(unlockedCompanies).innerJoin(companies, eq3(companies.id, unlockedCompanies.companyId)).leftJoin(companyScores, eq3(companyScores.companyId, companies.id)).where(eq3(unlockedCompanies.userId, userId)).orderBy(desc(unlockedCompanies.unlockedAt)).limit(limit);
 }
 async function markContacted(userId, companyId) {
   const [row] = await db.update(unlockedCompanies).set({ markedAsContacted: true, markedAsContactedAt: /* @__PURE__ */ new Date() }).where(and2(eq3(unlockedCompanies.userId, userId), eq3(unlockedCompanies.companyId, companyId))).returning();
@@ -899,6 +900,7 @@ var templates_default = router4;
 
 // server/routes/search.ts
 import { Router as Router5 } from "express";
+import { eq as eq5, and as and4, asc, inArray as inArray2 } from "drizzle-orm";
 init_schema();
 init_schema();
 var router5 = Router5();
@@ -993,6 +995,70 @@ function bucketEmployees(n) {
   if (n < 1e3) return "200-1000";
   return "1000+";
 }
+router5.get("/:id", requireAuth, async (req, res) => {
+  const userId = req.userId;
+  const id = req.params["id"];
+  if (typeof id !== "string" || !id) {
+    res.status(400).json({ error: "id required" });
+    return;
+  }
+  const [search] = await db.select().from(searches).where(eq5(searches.id, id)).limit(1);
+  if (!search || search.userId !== userId) {
+    res.status(404).json({ error: "Search not found" });
+    return;
+  }
+  const rows = await db.select({
+    result: searchResults,
+    company: companies,
+    score: companyScores
+  }).from(searchResults).innerJoin(companies, eq5(searchResults.companyId, companies.id)).leftJoin(companyScores, eq5(companyScores.companyId, companies.id)).where(eq5(searchResults.searchId, id)).orderBy(asc(searchResults.rank));
+  const tpl = search.templateUsed ? getTemplateById(search.templateUsed) : void 0;
+  const user = await getUserById(userId);
+  const allCompanyIds = rows.map((r) => r.company.id);
+  const unlockedSet = /* @__PURE__ */ new Set();
+  if (allCompanyIds.length > 0) {
+    const { unlockedCompanies: unlockedCompanies2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
+    const unlocks = await db.select({ companyId: unlockedCompanies2.companyId }).from(unlockedCompanies2).where(and4(eq5(unlockedCompanies2.userId, userId), inArray2(unlockedCompanies2.companyId, allCompanyIds)));
+    unlocks.forEach((u) => unlockedSet.add(u.companyId));
+  }
+  const freebieRow = rows.find((r) => r.company.id === search.freebieCompanyId);
+  const teasers = rows.filter((r) => r.company.id !== search.freebieCompanyId).slice(0, 12).map((r) => ({
+    id: r.company.id,
+    score: r.result.scoreSnapshot,
+    sector: r.company.sector,
+    city: r.company.city,
+    employeeCountRange: bucketEmployees(r.company.employeeCount),
+    partialFlag: Array.isArray(r.result.flagsSnapshot) && r.result.flagsSnapshot.length > 0 ? (
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      r.result.flagsSnapshot[0]?.label ?? "Postes ouverts"
+    ) : "Postes ouverts",
+    maskedInitial: r.company.name.charAt(0).toUpperCase(),
+    maskedLength: r.company.name.length,
+    alreadyUnlocked: unlockedSet.has(r.company.id)
+  }));
+  const sectors = user?.sectors ?? [];
+  const regions = user?.regions ?? [];
+  res.json({
+    searchId: search.id,
+    totalCount: search.resultCount,
+    template: tpl?.title ?? "Custom",
+    perimeterLabel: `${sectors.slice(0, 2).join(" / ")} / ${regions[0] ?? "France"}`,
+    freebie: freebieRow ? {
+      id: freebieRow.company.id,
+      name: freebieRow.company.name,
+      slug: freebieRow.company.slug,
+      sector: freebieRow.company.sector,
+      city: freebieRow.company.city,
+      size: bucketEmployees(freebieRow.company.employeeCount),
+      score: freebieRow.result.scoreSnapshot,
+      flags: Array.isArray(freebieRow.result.flagsSnapshot) ? (
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        freebieRow.result.flagsSnapshot.map((f) => f.label ?? "")
+      ) : []
+    } : null,
+    teasers
+  });
+});
 var search_default = router5;
 
 // server/routes/companies.ts
@@ -1184,7 +1250,7 @@ var credits_default = router7;
 // server/routes/stripe-webhook.ts
 import { Router as Router8 } from "express";
 import Stripe2 from "stripe";
-import { eq as eq5, sql as sql4 } from "drizzle-orm";
+import { eq as eq6, sql as sql4 } from "drizzle-orm";
 init_schema();
 var router8 = Router8();
 var cachedStripe2 = null;
@@ -1232,13 +1298,13 @@ router8.post("/", async (req, res) => {
       res.json({ received: true });
       return;
     }
-    const existing = await db.select().from(creditTransactions).where(eq5(creditTransactions.stripeSessionId, sessionId)).limit(1);
+    const existing = await db.select().from(creditTransactions).where(eq6(creditTransactions.stripeSessionId, sessionId)).limit(1);
     if (existing.length > 0) {
       console.log("[stripe-webhook] already processed", sessionId);
       res.json({ received: true, idempotent: true });
       return;
     }
-    const [updated] = await db.update(users).set({ creditsBalance: sql4`${users.creditsBalance} + ${pack.credits}` }).where(eq5(users.id, userId)).returning({ balance: users.creditsBalance });
+    const [updated] = await db.update(users).set({ creditsBalance: sql4`${users.creditsBalance} + ${pack.credits}` }).where(eq6(users.id, userId)).returning({ balance: users.creditsBalance });
     if (!updated) {
       console.error("[stripe-webhook] user not found", userId);
       res.status(404).json({ error: "user_not_found" });
@@ -1266,7 +1332,7 @@ import { Router as Router9 } from "express";
 import crypto3 from "node:crypto";
 
 // server/lib/data-sources/ingest.ts
-import { eq as eq6, and as and4 } from "drizzle-orm";
+import { eq as eq7, and as and5 } from "drizzle-orm";
 init_schema();
 
 // server/lib/data-sources/adzuna.ts
@@ -1445,11 +1511,11 @@ function slugify(s) {
 }
 async function findOrCreateCompany(name, city) {
   const slug = slugify(name);
-  const [existing] = await db.select({ id: companies.id }).from(companies).where(eq6(companies.slug, slug)).limit(1);
+  const [existing] = await db.select({ id: companies.id }).from(companies).where(eq7(companies.slug, slug)).limit(1);
   if (existing) return existing.id;
   const [row] = await db.insert(companies).values({ name, slug, city, dataSourcesUsed: [] }).onConflictDoNothing().returning({ id: companies.id });
   if (row) return row.id;
-  const [retry] = await db.select({ id: companies.id }).from(companies).where(eq6(companies.slug, slug)).limit(1);
+  const [retry] = await db.select({ id: companies.id }).from(companies).where(eq7(companies.slug, slug)).limit(1);
   if (!retry) throw new Error(`Failed to find/create company ${name}`);
   return retry.id;
 }
@@ -1464,10 +1530,10 @@ async function ingestAll() {
         const city = aj.location?.area?.[2] ?? aj.location?.display_name ?? null;
         const companyId = await findOrCreateCompany(companyName, city);
         const publishedAt = new Date(aj.created);
-        const [existing] = await db.select().from(jobs).where(and4(eq6(jobs.source, "adzuna"), eq6(jobs.externalId, aj.id))).limit(1);
+        const [existing] = await db.select().from(jobs).where(and5(eq7(jobs.source, "adzuna"), eq7(jobs.externalId, aj.id))).limit(1);
         if (existing) {
           if (publishedAt.getTime() > new Date(existing.publishedAt).getTime()) {
-            await db.update(jobs).set({ publishedAt, republicationCount: existing.republicationCount + 1, closedAt: null }).where(eq6(jobs.id, existing.id));
+            await db.update(jobs).set({ publishedAt, republicationCount: existing.republicationCount + 1, closedAt: null }).where(eq7(jobs.id, existing.id));
             await db.insert(companyTimelineEvents).values({
               companyId,
               eventDate: publishedAt.toISOString().slice(0, 10),
@@ -1514,10 +1580,10 @@ async function ingestAll() {
         const city = fj.lieuTravail?.commune ?? fj.lieuTravail?.libelle ?? null;
         const companyId = await findOrCreateCompany(companyName, city);
         const publishedAt = new Date(fj.dateCreation);
-        const [existing] = await db.select().from(jobs).where(and4(eq6(jobs.source, "france_travail"), eq6(jobs.externalId, fj.id))).limit(1);
+        const [existing] = await db.select().from(jobs).where(and5(eq7(jobs.source, "france_travail"), eq7(jobs.externalId, fj.id))).limit(1);
         if (existing) {
           if (publishedAt.getTime() > new Date(existing.publishedAt).getTime()) {
-            await db.update(jobs).set({ publishedAt, republicationCount: existing.republicationCount + 1, closedAt: null }).where(eq6(jobs.id, existing.id));
+            await db.update(jobs).set({ publishedAt, republicationCount: existing.republicationCount + 1, closedAt: null }).where(eq7(jobs.id, existing.id));
             stats.republished++;
           }
         } else {
@@ -1551,7 +1617,7 @@ async function recomputeAllScores() {
   const allCompanies = await db.select({ id: companies.id, fundingStage: companies.fundingStage, lastFundingDate: companies.lastFundingDate }).from(companies);
   let scored = 0;
   for (const c of allCompanies) {
-    const cJobs = await db.select().from(jobs).where(eq6(jobs.companyId, c.id));
+    const cJobs = await db.select().from(jobs).where(eq7(jobs.companyId, c.id));
     if (cJobs.length === 0) continue;
     const fundingMonths = c.lastFundingDate ? Math.floor((Date.now() - new Date(c.lastFundingDate).getTime()) / (30 * 864e5)) : null;
     const scores = computeScore2({ jobs: cJobs, fundingRecentMonths: fundingMonths });
