@@ -76,3 +76,4 @@ Voir SIGNALS_SPARKWAY.md §11 pour le détail. Synthèse :
 - Tous les endpoints validés avec **Zod** (input ET output)
 - Drizzle queries dans `server/repositories/`, jamais directement dans les routes
 - Commits préfixés : `feat:`, `fix:`, `chore:`, `refactor:`
+// test webhook jeu. 30 avr. 2026 15:01:27 CEST
