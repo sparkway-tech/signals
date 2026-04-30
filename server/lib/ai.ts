@@ -2,7 +2,8 @@
  * Prompts AI Anthropic.
  * Source : SIGNALS_SPARKWAY.md §7.
  *
- * Modèle : claude-opus-4-7 (qualitatif).
+ * Modèle : claude-haiku-4-5 (rapide + ~15× moins cher qu'Opus, qualité
+ * suffisante pour les 4 lignes de reco et les 2-3 phrases d'angle).
  * Si ANTHROPIC_API_KEY manque → on no-op (renvoie null pour laisser le
  * fallback côté front afficher "non générée").
  */
@@ -18,7 +19,7 @@ function getClient(): Anthropic | null {
   return cachedClient;
 }
 
-const MODEL = "claude-opus-4-7";
+const MODEL = "claude-haiku-4-5-20251001";
 
 export async function generateRecommendation(
   company: Company,
