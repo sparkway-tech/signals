@@ -105,7 +105,7 @@ export function Onboarding() {
           )}
           {step === 2 && (
             <h1 className="font-serif font-light text-[40px] leading-[1.1] tracking-tight text-ink">
-              Quelles fonctions tu places ?
+              Quelles expertises tu recrutes ?
             </h1>
           )}
           {step === 3 && (
@@ -115,7 +115,7 @@ export function Onboarding() {
           )}
           <p className="mt-4 text-sm text-ink-soft leading-relaxed max-w-md mx-auto">
             {step === 1 && "Choisis jusqu'à 3 verticales. On filtrera les boîtes à scanner en fonction."}
-            {step === 2 && "Choisis jusqu'à 5 fonctions. Les annonces hors périmètre seront ignorées."}
+            {step === 2 && "Choisis jusqu'à 5 expertises. Les annonces hors périmètre seront ignorées."}
             {step === 3 && "Sélectionne autant de zones que nécessaire."}
           </p>
         </div>
@@ -170,7 +170,7 @@ export function Onboarding() {
           </GhostButton>
           <div className="text-xs text-ink-soft">
             {step === 1 && `${sectors.length}/3 secteurs`}
-            {step === 2 && `${functions.length}/5 fonctions`}
+            {step === 2 && `${functions.length}/5 expertises`}
             {step === 3 && `${regions.length} régions`}
           </div>
           {step < 3 ? (
