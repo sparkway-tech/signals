@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import crypto from "node:crypto";
 import { ingestAll, recomputeAllScores } from "@server/lib/data-sources/ingest";
+import { seedReferenceCompanies } from "@server/lib/seed";
 
 const router = Router();
 
@@ -52,6 +53,22 @@ router.get("/recompute-scores", async (req: Request, res: Response) => {
     res.json({ ok: true, ...stats });
   } catch (err) {
     console.error("[cron/recompute] failed:", err);
+    res.status(500).json({ error: err instanceof Error ? err.message : "Failed" });
+  }
+});
+
+/**
+ * POST /api/cron/seed-reference-companies
+ * Seed initial idempotent : Pennylane, Spendesk, Aircall.
+ * Appelé manuellement après le premier déploiement.
+ */
+router.post("/seed-reference-companies", async (req: Request, res: Response) => {
+  if (!authorize(req, res)) return;
+  try {
+    const stats = await seedReferenceCompanies();
+    res.json({ ok: true, ...stats });
+  } catch (err) {
+    console.error("[cron/seed] failed:", err);
     res.status(500).json({ error: err instanceof Error ? err.message : "Failed" });
   }
 });
