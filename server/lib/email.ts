@@ -19,7 +19,7 @@ const APP_URL = process.env.APP_URL ?? "https://signals.sparkway.work";
  * Fraunces serif pour le titre, Inter pour le corps.
  */
 export async function sendMagicLinkEmail(to: string, token: string): Promise<void> {
-  const url = `${APP_URL}/auth/verify?token=${encodeURIComponent(token)}`;
+  const url = `${APP_URL}/api/auth/verify?token=${encodeURIComponent(token)}`;
   const html = renderMagicLinkHtml(url);
   const text = `Connecte-toi à Sparkway Signals\n\nClique sur ce lien (valide 15 minutes) :\n${url}\n\nSi tu n'as pas demandé ce lien, ignore cet email.`;
 
