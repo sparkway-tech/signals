@@ -14,7 +14,7 @@ import { db } from "./db";
  * CURRENT_SCHEMA_VERSION. Le prochain cold start re-jouera tout (idempotent).
  */
 
-const CURRENT_SCHEMA_VERSION = 1;
+const CURRENT_SCHEMA_VERSION = 2;
 
 let migrationsRan = false;
 
@@ -96,6 +96,162 @@ export async function runStartupMigrations(): Promise<void> {
     )
   `);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS "credit_transactions_user_id_idx" ON "credit_transactions" ("user_id", "created_at" DESC)`);
+  log("0001 done");
+
+  // ─── 0002 — Tables produit (semaines 2-3) ────────────────────────────
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS "companies" (
+      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      "name" text NOT NULL,
+      "slug" text NOT NULL UNIQUE,
+      "website_url" text,
+      "city" text,
+      "region" text,
+      "sector" text,
+      "sector_precise" text,
+      "employee_count" integer,
+      "funding_stage" text,
+      "last_funding_amount" integer,
+      "last_funding_date" date,
+      "ceo_name" text,
+      "ceo_linkedin_url" text,
+      "pappers_id" text,
+      "first_seen_at" timestamptz NOT NULL DEFAULT now(),
+      "last_updated_at" timestamptz NOT NULL DEFAULT now(),
+      "data_sources_used" jsonb NOT NULL DEFAULT '[]'::jsonb
+    )
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS "companies_slug_idx" ON "companies" ("slug")`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS "companies_sector_idx" ON "companies" ("sector")`);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS "jobs" (
+      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      "company_id" uuid NOT NULL REFERENCES "companies"("id") ON DELETE CASCADE,
+      "external_id" text NOT NULL,
+      "source" text NOT NULL,
+      "title" text NOT NULL,
+      "function" text,
+      "level" text,
+      "city" text,
+      "published_at" timestamptz NOT NULL,
+      "closed_at" timestamptz,
+      "republication_count" integer NOT NULL DEFAULT 0,
+      "url" text NOT NULL,
+      "raw_data" jsonb,
+      CONSTRAINT "jobs_source_external_uniq" UNIQUE ("source", "external_id")
+    )
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS "jobs_company_id_idx" ON "jobs" ("company_id")`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS "jobs_published_at_idx" ON "jobs" ("published_at" DESC)`);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS "company_scores" (
+      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      "company_id" uuid NOT NULL UNIQUE REFERENCES "companies"("id") ON DELETE CASCADE,
+      "score" integer NOT NULL,
+      "score_volume" integer NOT NULL,
+      "score_persistance" integer NOT NULL,
+      "score_republication" integer NOT NULL,
+      "score_croissance_sales" integer NOT NULL,
+      "flags" jsonb NOT NULL DEFAULT '[]'::jsonb,
+      "computed_at" timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS "company_scores_score_idx" ON "company_scores" ("score" DESC)`);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS "decision_makers" (
+      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      "company_id" uuid NOT NULL REFERENCES "companies"("id") ON DELETE CASCADE,
+      "full_name" text NOT NULL,
+      "role" text NOT NULL,
+      "title_exact" text NOT NULL,
+      "linkedin_url" text,
+      "started_at" date,
+      "is_recent" boolean NOT NULL DEFAULT false,
+      "source" text NOT NULL,
+      "angle_approach" text,
+      "angle_generated_at" timestamptz
+    )
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS "decision_makers_company_id_idx" ON "decision_makers" ("company_id")`);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS "company_recommendations" (
+      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      "company_id" uuid NOT NULL UNIQUE REFERENCES "companies"("id") ON DELETE CASCADE,
+      "recommendation" text NOT NULL,
+      "generated_at" timestamptz NOT NULL DEFAULT now(),
+      "model_used" text NOT NULL
+    )
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS "mandate_estimates" (
+      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      "company_id" uuid NOT NULL UNIQUE REFERENCES "companies"("id") ON DELETE CASCADE,
+      "estimate_min" integer NOT NULL,
+      "estimate_max" integer NOT NULL,
+      "breakdown_json" jsonb NOT NULL DEFAULT '[]'::jsonb,
+      "computed_at" timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS "company_timeline_events" (
+      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      "company_id" uuid NOT NULL REFERENCES "companies"("id") ON DELETE CASCADE,
+      "event_date" date NOT NULL,
+      "event_type" text NOT NULL,
+      "description" text NOT NULL,
+      "metadata" jsonb,
+      "sort_order" integer NOT NULL DEFAULT 0
+    )
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS "timeline_company_id_idx" ON "company_timeline_events" ("company_id", "event_date" DESC)`);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS "searches" (
+      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      "user_id" uuid NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+      "template_used" text,
+      "filters" jsonb NOT NULL DEFAULT '{}'::jsonb,
+      "result_count" integer NOT NULL DEFAULT 0,
+      "freebie_company_id" uuid,
+      "created_at" timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS "searches_user_id_idx" ON "searches" ("user_id", "created_at" DESC)`);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS "search_results" (
+      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      "search_id" uuid NOT NULL REFERENCES "searches"("id") ON DELETE CASCADE,
+      "company_id" uuid NOT NULL REFERENCES "companies"("id") ON DELETE CASCADE,
+      "rank" integer NOT NULL,
+      "score_snapshot" integer NOT NULL,
+      "flags_snapshot" jsonb
+    )
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS "search_results_search_id_idx" ON "search_results" ("search_id", "rank")`);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS "unlocked_companies" (
+      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      "user_id" uuid NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+      "company_id" uuid NOT NULL REFERENCES "companies"("id") ON DELETE CASCADE,
+      "unlocked_via" text NOT NULL,
+      "credits_cost" integer NOT NULL,
+      "unlocked_at" timestamptz NOT NULL DEFAULT now(),
+      "marked_as_contacted" boolean NOT NULL DEFAULT false,
+      "marked_as_contacted_at" timestamptz,
+      CONSTRAINT "unlocked_user_company_uniq" UNIQUE ("user_id", "company_id")
+    )
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS "unlocked_user_idx" ON "unlocked_companies" ("user_id", "unlocked_at" DESC)`);
+
+  log("0002 done");
 
   // ─── Mark version as up-to-date ────────────────────────────────────────
   await db.execute(sql`UPDATE "schema_version" SET version = ${CURRENT_SCHEMA_VERSION}, updated_at = NOW() WHERE id = 1`);
