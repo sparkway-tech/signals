@@ -106,7 +106,7 @@ function getClient() {
 var FROM = process.env.RESEND_FROM_EMAIL ?? "signals@sparkway.work";
 var APP_URL = process.env.APP_URL ?? "https://signals.sparkway.work";
 async function sendMagicLinkEmail(to, token) {
-  const url = `${APP_URL}/auth/verify?token=${encodeURIComponent(token)}`;
+  const url = `${APP_URL}/api/auth/verify?token=${encodeURIComponent(token)}`;
   const html = renderMagicLinkHtml(url);
   const text2 = `Connecte-toi \xE0 Sparkway Signals
 
@@ -325,27 +325,44 @@ router.post("/magic-link", async (req, res) => {
   }
 });
 router.get("/verify", async (req, res) => {
+  const t0 = Date.now();
+  const log = (step) => console.log(`[verify] ${step} (+${Date.now() - t0}ms)`);
   const token = typeof req.query.token === "string" ? req.query.token : "";
   if (!token || token.length < 32) {
+    log("invalid_token (length)");
     res.redirect("/auth/login?error=invalid_token");
     return;
   }
-  const hash = hashToken(token);
-  const row = await findValidTokenByHash(hash);
-  if (!row) {
-    res.redirect("/auth/login?error=expired_token");
-    return;
+  try {
+    const hash = hashToken(token);
+    log("hash computed");
+    const row = await findValidTokenByHash(hash);
+    log(`findValidTokenByHash \u2192 ${row ? "found" : "not_found"}`);
+    if (!row) {
+      res.redirect("/auth/login?error=expired_token");
+      return;
+    }
+    await markTokenUsed(row.id);
+    log("markTokenUsed");
+    const user = await getUserById(row.userId);
+    log(`getUserById \u2192 ${user ? user.email : "not_found"}`);
+    if (!user) {
+      res.redirect("/auth/login?error=user_not_found");
+      return;
+    }
+    await markUserLoggedIn(user.id);
+    log("markUserLoggedIn");
+    const cookie = buildSessionCookie(user.id);
+    res.cookie(cookie.name, cookie.value, cookie.options);
+    log("cookie set");
+    const redirectTo = user.onboardingCompleted ? "/recherche" : "/onboarding";
+    log(`redirect \u2192 ${redirectTo}`);
+    res.redirect(redirectTo);
+  } catch (err) {
+    log(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
+    console.error("[verify] stack:", err);
+    res.redirect("/auth/login?error=server_error");
   }
-  await markTokenUsed(row.id);
-  const user = await getUserById(row.userId);
-  if (!user) {
-    res.redirect("/auth/login?error=user_not_found");
-    return;
-  }
-  await markUserLoggedIn(user.id);
-  const cookie = buildSessionCookie(user.id);
-  res.cookie(cookie.name, cookie.value, cookie.options);
-  res.redirect(user.onboardingCompleted ? "/recherche" : "/onboarding");
 });
 router.post("/logout", (_req, res) => {
   const c = clearSessionCookie();
@@ -403,6 +420,9 @@ var migrationsRan = false;
 async function runStartupMigrations() {
   if (migrationsRan) return;
   migrationsRan = true;
+  const t0 = Date.now();
+  const log = (step) => console.log(`[startup-migrations] ${step} (+${Date.now() - t0}ms)`);
+  log("start");
   await db.execute(sql3`
     CREATE TABLE IF NOT EXISTS "schema_version" (
       "id" integer PRIMARY KEY,
@@ -410,16 +430,18 @@ async function runStartupMigrations() {
       "updated_at" timestamp NOT NULL DEFAULT now()
     )
   `);
+  log("schema_version table OK");
   await db.execute(sql3`INSERT INTO "schema_version" ("id", "version") VALUES (1, 0) ON CONFLICT ("id") DO NOTHING`);
   const versionRows = await db.execute(
     sql3`SELECT version FROM "schema_version" WHERE id = 1`
   );
   const currentVersion = versionRows.rows?.[0]?.version ?? 0;
+  log(`currentVersion = ${currentVersion}, target = ${CURRENT_SCHEMA_VERSION}`);
   if (currentVersion >= CURRENT_SCHEMA_VERSION) {
+    log("up-to-date, skipping");
     return;
   }
   console.log(`[startup-migrations] Schema v${currentVersion} \u2192 v${CURRENT_SCHEMA_VERSION}, running migrations...`);
-  const t0 = Date.now();
   await db.execute(sql3`
     CREATE TABLE IF NOT EXISTS "users" (
       "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
