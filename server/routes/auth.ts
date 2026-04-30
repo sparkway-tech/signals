@@ -41,32 +41,52 @@ router.post("/magic-link", async (req: Request, res: Response) => {
  * /onboarding ou /recherche selon onboardingCompleted.
  */
 router.get("/verify", async (req: Request, res: Response) => {
+  const t0 = Date.now();
+  const log = (step: string) => console.log(`[verify] ${step} (+${Date.now() - t0}ms)`);
+
   const token = typeof req.query.token === "string" ? req.query.token : "";
   if (!token || token.length < 32) {
+    log("invalid_token (length)");
     res.redirect("/auth/login?error=invalid_token");
     return;
   }
 
-  const hash = hashToken(token);
-  const row = await findValidTokenByHash(hash);
-  if (!row) {
-    res.redirect("/auth/login?error=expired_token");
-    return;
+  try {
+    const hash = hashToken(token);
+    log("hash computed");
+
+    const row = await findValidTokenByHash(hash);
+    log(`findValidTokenByHash → ${row ? "found" : "not_found"}`);
+    if (!row) {
+      res.redirect("/auth/login?error=expired_token");
+      return;
+    }
+
+    await markTokenUsed(row.id);
+    log("markTokenUsed");
+
+    const user = await getUserById(row.userId);
+    log(`getUserById → ${user ? user.email : "not_found"}`);
+    if (!user) {
+      res.redirect("/auth/login?error=user_not_found");
+      return;
+    }
+
+    await markUserLoggedIn(user.id);
+    log("markUserLoggedIn");
+
+    const cookie = buildSessionCookie(user.id);
+    res.cookie(cookie.name, cookie.value, cookie.options);
+    log("cookie set");
+
+    const redirectTo = user.onboardingCompleted ? "/recherche" : "/onboarding";
+    log(`redirect → ${redirectTo}`);
+    res.redirect(redirectTo);
+  } catch (err) {
+    log(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
+    console.error("[verify] stack:", err);
+    res.redirect("/auth/login?error=server_error");
   }
-
-  await markTokenUsed(row.id);
-  const user = await getUserById(row.userId);
-  if (!user) {
-    res.redirect("/auth/login?error=user_not_found");
-    return;
-  }
-
-  await markUserLoggedIn(user.id);
-
-  const cookie = buildSessionCookie(user.id);
-  res.cookie(cookie.name, cookie.value, cookie.options);
-
-  res.redirect(user.onboardingCompleted ? "/recherche" : "/onboarding");
 });
 
 /**

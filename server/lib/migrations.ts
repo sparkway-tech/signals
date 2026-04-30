@@ -22,6 +22,10 @@ export async function runStartupMigrations(): Promise<void> {
   if (migrationsRan) return;
   migrationsRan = true;
 
+  const t0 = Date.now();
+  const log = (step: string) => console.log(`[startup-migrations] ${step} (+${Date.now() - t0}ms)`);
+  log("start");
+
   // ─── Schema version gate ───────────────────────────────────────────────
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS "schema_version" (
@@ -30,18 +34,20 @@ export async function runStartupMigrations(): Promise<void> {
       "updated_at" timestamp NOT NULL DEFAULT now()
     )
   `);
+  log("schema_version table OK");
   await db.execute(sql`INSERT INTO "schema_version" ("id", "version") VALUES (1, 0) ON CONFLICT ("id") DO NOTHING`);
   const versionRows = await db.execute<{ version: number }>(
     sql`SELECT version FROM "schema_version" WHERE id = 1`,
   );
   const currentVersion = (versionRows as { rows?: { version: number }[] }).rows?.[0]?.version ?? 0;
+  log(`currentVersion = ${currentVersion}, target = ${CURRENT_SCHEMA_VERSION}`);
 
   if (currentVersion >= CURRENT_SCHEMA_VERSION) {
+    log("up-to-date, skipping");
     return;
   }
 
   console.log(`[startup-migrations] Schema v${currentVersion} → v${CURRENT_SCHEMA_VERSION}, running migrations...`);
-  const t0 = Date.now();
 
   // ─── 0001 — Foundation (semaine 1) ─────────────────────────────────────
   // users
