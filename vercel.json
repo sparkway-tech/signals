@@ -11,7 +11,7 @@
     { "source": "/(.*)", "destination": "/index.html" }
   ],
   "crons": [
-    { "path": "/api/cron/ingest-jobs", "schedule": "0 */6 * * *" },
-    { "path": "/api/cron/recompute-scores", "schedule": "30 */6 * * *" }
+    { "path": "/api/cron/ingest-jobs", "schedule": "0 6 * * *" },
+    { "path": "/api/cron/recompute-scores", "schedule": "30 6 * * *" }
   ]
 }
