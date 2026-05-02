@@ -62,9 +62,29 @@ function getCreds(): { appId: string; appKey: string } | null {
   return { appId, appKey };
 }
 
+async function fetchAdzunaPage(
+  creds: { appId: string; appKey: string },
+  keyword: string,
+  page: number,
+): Promise<AdzunaJob[]> {
+  const url = `${BASE}/search/${page}?app_id=${encodeURIComponent(creds.appId)}&app_key=${encodeURIComponent(creds.appKey)}&results_per_page=50&what=${encodeURIComponent(keyword)}&content-type=application/json`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      console.warn(`[adzuna] ${keyword} p${page} → ${res.status}`);
+      return [];
+    }
+    const data = (await res.json()) as AdzunaResponse;
+    return data.results ?? [];
+  } catch (err) {
+    console.error(`[adzuna] ${keyword} p${page} fetch failed:`, err);
+    return [];
+  }
+}
+
 /**
- * Fetch les annonces tech sur Adzuna FR.
- * Boucle sur tous les keywords, dédup par id.
+ * Fetch les annonces tech sur Adzuna FR. Parallélisé par chunks de 6
+ * pour ne pas saturer leur API ni notre IP. Dédup par id.
  */
 export async function fetchAdzunaTechJobs(maxPagesPerKeyword = 1): Promise<AdzunaJob[]> {
   const creds = getCreds();
@@ -73,32 +93,31 @@ export async function fetchAdzunaTechJobs(maxPagesPerKeyword = 1): Promise<Adzun
     return [];
   }
 
-  const seen = new Set<string>();
-  const all: AdzunaJob[] = [];
-
+  // Build full task list (keyword × page)
+  const tasks: Array<{ keyword: string; page: number }> = [];
   for (const keyword of TECH_KEYWORDS) {
     for (let page = 1; page <= maxPagesPerKeyword; page++) {
-      const url = `${BASE}/search/${page}?app_id=${encodeURIComponent(creds.appId)}&app_key=${encodeURIComponent(creds.appKey)}&results_per_page=50&what=${encodeURIComponent(keyword)}&content-type=application/json`;
-      try {
-        const res = await fetch(url);
-        if (!res.ok) {
-          console.warn(`[adzuna] ${keyword} p${page} → ${res.status}`);
-          continue;
+      tasks.push({ keyword, page });
+    }
+  }
+
+  const seen = new Set<string>();
+  const all: AdzunaJob[] = [];
+  const CHUNK = 6;
+  for (let i = 0; i < tasks.length; i += CHUNK) {
+    const slice = tasks.slice(i, i + CHUNK);
+    const results = await Promise.all(slice.map((t) => fetchAdzunaPage(creds, t.keyword, t.page)));
+    for (const batch of results) {
+      for (const job of batch) {
+        if (!seen.has(job.id)) {
+          seen.add(job.id);
+          all.push(job);
         }
-        const data = (await res.json()) as AdzunaResponse;
-        for (const job of data.results) {
-          if (!seen.has(job.id)) {
-            seen.add(job.id);
-            all.push(job);
-          }
-        }
-      } catch (err) {
-        console.error(`[adzuna] ${keyword} p${page} fetch failed:`, err);
       }
     }
   }
 
-  console.log(`[adzuna] fetched ${all.length} unique jobs across ${TECH_KEYWORDS.length} keywords`);
+  console.log(`[adzuna] fetched ${all.length} unique jobs across ${TECH_KEYWORDS.length} keywords × ${maxPagesPerKeyword} pages`);
   return all;
 }
 
