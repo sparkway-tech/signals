@@ -1332,7 +1332,7 @@ import { Router as Router9 } from "express";
 import crypto3 from "node:crypto";
 
 // server/lib/data-sources/ingest.ts
-import { eq as eq7, and as and5, inArray as inArray3, isNull as isNull3 } from "drizzle-orm";
+import { eq as eq7, and as and5, inArray as inArray3, isNull as isNull3, sql as dsql2 } from "drizzle-orm";
 init_schema();
 
 // server/lib/data-sources/adzuna.ts
@@ -1737,10 +1737,26 @@ async function recomputeAllScores() {
   const { computeScore: computeScore2, computeFlags: computeFlags2 } = await Promise.resolve().then(() => (init_scoring(), scoring_exports));
   const { companyScores: companyScores2 } = await Promise.resolve().then(() => (init_schema(), schema_exports));
   const allCompanies = await db.select({ id: companies.id, fundingStage: companies.fundingStage, lastFundingDate: companies.lastFundingDate }).from(companies);
-  let scored = 0;
+  if (allCompanies.length === 0) return { scored: 0, skipped: 0 };
+  const jobsByCompany = /* @__PURE__ */ new Map();
+  const companyIds = allCompanies.map((c) => c.id);
+  for (let i = 0; i < companyIds.length; i += 500) {
+    const slice = companyIds.slice(i, i + 500);
+    const rows = await db.select().from(jobs).where(inArray3(jobs.companyId, slice));
+    for (const j of rows) {
+      const arr = jobsByCompany.get(j.companyId) ?? [];
+      arr.push(j);
+      jobsByCompany.set(j.companyId, arr);
+    }
+  }
+  const rowsToUpsert = [];
+  let skipped = 0;
   for (const c of allCompanies) {
-    const cJobs = await db.select().from(jobs).where(eq7(jobs.companyId, c.id));
-    if (cJobs.length === 0) continue;
+    const cJobs = jobsByCompany.get(c.id) ?? [];
+    if (cJobs.length === 0) {
+      skipped++;
+      continue;
+    }
     const fundingMonths = c.lastFundingDate ? Math.floor((Date.now() - new Date(c.lastFundingDate).getTime()) / (30 * 864e5)) : null;
     const scores = computeScore2({ jobs: cJobs, fundingRecentMonths: fundingMonths });
     const flags = computeFlags2({
@@ -1749,7 +1765,7 @@ async function recomputeAllScores() {
       fundingRecentMonths: fundingMonths,
       fundingStage: c.fundingStage
     });
-    await db.insert(companyScores2).values({
+    rowsToUpsert.push({
       companyId: c.id,
       score: scores.score,
       scoreVolume: scores.scoreVolume,
@@ -1757,21 +1773,26 @@ async function recomputeAllScores() {
       scoreRepublication: scores.scoreRepublication,
       scoreCroissanceSales: scores.scoreCroissanceSales,
       flags
-    }).onConflictDoUpdate({
+    });
+  }
+  let scored = 0;
+  for (let i = 0; i < rowsToUpsert.length; i += 50) {
+    const chunk = rowsToUpsert.slice(i, i + 50);
+    await db.insert(companyScores2).values(chunk).onConflictDoUpdate({
       target: companyScores2.companyId,
       set: {
-        score: scores.score,
-        scoreVolume: scores.scoreVolume,
-        scorePersistance: scores.scorePersistance,
-        scoreRepublication: scores.scoreRepublication,
-        scoreCroissanceSales: scores.scoreCroissanceSales,
-        flags,
+        score: dsql2`excluded.score`,
+        scoreVolume: dsql2`excluded.score_volume`,
+        scorePersistance: dsql2`excluded.score_persistance`,
+        scoreRepublication: dsql2`excluded.score_republication`,
+        scoreCroissanceSales: dsql2`excluded.score_croissance_sales`,
+        flags: dsql2`excluded.flags`,
         computedAt: /* @__PURE__ */ new Date()
       }
     });
-    scored++;
+    scored += chunk.length;
   }
-  return { scored };
+  return { scored, skipped };
 }
 
 // server/lib/seed.ts
