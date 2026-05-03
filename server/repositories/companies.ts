@@ -1,4 +1,4 @@
-import { eq, and, desc, inArray, isNull, gte, sql as dsql } from "drizzle-orm";
+import { eq, and, desc, inArray, isNull, gte, or, sql as dsql } from "drizzle-orm";
 import { db } from "@server/lib/db";
 import {
   companies,
@@ -76,12 +76,18 @@ export interface SearchResultRow {
 
 export async function searchCompanies(filters: SearchFilters): Promise<SearchResultRow[]> {
   const conditions = [];
+
+  // Sector : si la company a un secteur connu il doit matcher, sinon on
+  // laisse passer (les ingestions n'ont pas toujours de secteur).
   if (filters.sectors && filters.sectors.length > 0) {
-    conditions.push(inArray(companies.sector, filters.sectors));
+    conditions.push(or(isNull(companies.sector), inArray(companies.sector, filters.sectors)));
   }
+
+  // Région : strict (sinon le périmètre ne sert plus à rien).
   if (filters.regions && filters.regions.length > 0) {
     conditions.push(inArray(companies.region, filters.regions));
   }
+
   if (filters.fundingStages && filters.fundingStages.length > 0) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     conditions.push(inArray(companies.fundingStage, filters.fundingStages as any));

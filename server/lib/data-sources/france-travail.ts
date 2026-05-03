@@ -82,9 +82,26 @@ interface FranceTravailResponse {
   resultats: FranceTravailJob[];
 }
 
+async function fetchFTByCode(token: string, code: string, maxPerCode: number): Promise<FranceTravailJob[]> {
+  const url = `${SEARCH_URL}?codeROME=${code}&range=0-${maxPerCode - 1}`;
+  try {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) {
+      console.warn(`[ft] ${code} → ${res.status}`);
+      return [];
+    }
+    const data = (await res.json()) as FranceTravailResponse;
+    return data.resultats ?? [];
+  } catch (err) {
+    console.error(`[ft] ${code} failed:`, err);
+    return [];
+  }
+}
+
 /**
  * Fetch les annonces tech sur France Travail.
- * Boucle sur les codes ROME, dédup par id.
+ * Parallélisé sur les ROME codes (rate limit FT = 10 req/s, on a 9 codes).
+ * Dédup par id.
  */
 export async function fetchFranceTravailJobs(maxPerCode = 100): Promise<FranceTravailJob[]> {
   const token = await getToken();
@@ -93,29 +110,16 @@ export async function fetchFranceTravailJobs(maxPerCode = 100): Promise<FranceTr
     return [];
   }
 
+  const results = await Promise.all(ROME_CODES.map((code) => fetchFTByCode(token, code, maxPerCode)));
+
   const seen = new Set<string>();
   const all: FranceTravailJob[] = [];
-
-  for (const code of ROME_CODES) {
-    const url = `${SEARCH_URL}?codeROME=${code}&range=0-${maxPerCode - 1}`;
-    try {
-      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) {
-        console.warn(`[ft] ${code} → ${res.status}`);
-        // 1 req/sec rate limit
-        await new Promise((r) => setTimeout(r, 1100));
-        continue;
+  for (const batch of results) {
+    for (const job of batch) {
+      if (!seen.has(job.id)) {
+        seen.add(job.id);
+        all.push(job);
       }
-      const data = (await res.json()) as FranceTravailResponse;
-      for (const job of data.resultats ?? []) {
-        if (!seen.has(job.id)) {
-          seen.add(job.id);
-          all.push(job);
-        }
-      }
-      await new Promise((r) => setTimeout(r, 1100));
-    } catch (err) {
-      console.error(`[ft] ${code} failed:`, err);
     }
   }
 

@@ -822,7 +822,7 @@ function getTemplateById(id) {
 }
 
 // server/repositories/companies.ts
-import { eq as eq4, and as and3, desc as desc2, inArray, isNull as isNull2, gte as gte2, sql as dsql } from "drizzle-orm";
+import { eq as eq4, and as and3, desc as desc2, inArray, isNull as isNull2, gte as gte2, or, sql as dsql } from "drizzle-orm";
 init_schema();
 async function getCompanyById(id) {
   const [row] = await db.select().from(companies).where(eq4(companies.id, id)).limit(1);
@@ -852,7 +852,7 @@ async function getTimelineForCompany(companyId) {
 async function searchCompanies(filters) {
   const conditions = [];
   if (filters.sectors && filters.sectors.length > 0) {
-    conditions.push(inArray(companies.sector, filters.sectors));
+    conditions.push(or(isNull2(companies.sector), inArray(companies.sector, filters.sectors)));
   }
   if (filters.regions && filters.regions.length > 0) {
     conditions.push(inArray(companies.region, filters.regions));
@@ -1332,7 +1332,7 @@ import { Router as Router9 } from "express";
 import crypto3 from "node:crypto";
 
 // server/lib/data-sources/ingest.ts
-import { eq as eq7, and as and5 } from "drizzle-orm";
+import { eq as eq7, and as and5, inArray as inArray3, isNull as isNull3 } from "drizzle-orm";
 init_schema();
 
 // server/lib/data-sources/adzuna.ts
@@ -1372,36 +1372,49 @@ function getCreds() {
   if (!appId || !appKey) return null;
   return { appId, appKey };
 }
+async function fetchAdzunaPage(creds, keyword, page) {
+  const url = `${BASE}/search/${page}?app_id=${encodeURIComponent(creds.appId)}&app_key=${encodeURIComponent(creds.appKey)}&results_per_page=50&what=${encodeURIComponent(keyword)}&content-type=application/json`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      console.warn(`[adzuna] ${keyword} p${page} \u2192 ${res.status}`);
+      return [];
+    }
+    const data = await res.json();
+    return data.results ?? [];
+  } catch (err) {
+    console.error(`[adzuna] ${keyword} p${page} fetch failed:`, err);
+    return [];
+  }
+}
 async function fetchAdzunaTechJobs(maxPagesPerKeyword = 1) {
   const creds = getCreds();
   if (!creds) {
     console.warn("[adzuna] credentials missing \u2014 skip");
     return [];
   }
-  const seen = /* @__PURE__ */ new Set();
-  const all = [];
+  const tasks = [];
   for (const keyword of TECH_KEYWORDS) {
     for (let page = 1; page <= maxPagesPerKeyword; page++) {
-      const url = `${BASE}/search/${page}?app_id=${encodeURIComponent(creds.appId)}&app_key=${encodeURIComponent(creds.appKey)}&results_per_page=50&what=${encodeURIComponent(keyword)}&content-type=application/json`;
-      try {
-        const res = await fetch(url);
-        if (!res.ok) {
-          console.warn(`[adzuna] ${keyword} p${page} \u2192 ${res.status}`);
-          continue;
+      tasks.push({ keyword, page });
+    }
+  }
+  const seen = /* @__PURE__ */ new Set();
+  const all = [];
+  const CHUNK = 6;
+  for (let i = 0; i < tasks.length; i += CHUNK) {
+    const slice = tasks.slice(i, i + CHUNK);
+    const results = await Promise.all(slice.map((t) => fetchAdzunaPage(creds, t.keyword, t.page)));
+    for (const batch of results) {
+      for (const job of batch) {
+        if (!seen.has(job.id)) {
+          seen.add(job.id);
+          all.push(job);
         }
-        const data = await res.json();
-        for (const job of data.results) {
-          if (!seen.has(job.id)) {
-            seen.add(job.id);
-            all.push(job);
-          }
-        }
-      } catch (err) {
-        console.error(`[adzuna] ${keyword} p${page} fetch failed:`, err);
       }
     }
   }
-  console.log(`[adzuna] fetched ${all.length} unique jobs across ${TECH_KEYWORDS.length} keywords`);
+  console.log(`[adzuna] fetched ${all.length} unique jobs across ${TECH_KEYWORDS.length} keywords \xD7 ${maxPagesPerKeyword} pages`);
   return all;
 }
 function normalizeFunction(title) {
@@ -1472,144 +1485,253 @@ async function getToken() {
   };
   return data.access_token;
 }
+async function fetchFTByCode(token, code, maxPerCode) {
+  const url = `${SEARCH_URL}?codeROME=${code}&range=0-${maxPerCode - 1}`;
+  try {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) {
+      console.warn(`[ft] ${code} \u2192 ${res.status}`);
+      return [];
+    }
+    const data = await res.json();
+    return data.resultats ?? [];
+  } catch (err) {
+    console.error(`[ft] ${code} failed:`, err);
+    return [];
+  }
+}
 async function fetchFranceTravailJobs(maxPerCode = 100) {
   const token = await getToken();
   if (!token) {
     console.warn("[ft] no token \u2014 skip");
     return [];
   }
+  const results = await Promise.all(ROME_CODES.map((code) => fetchFTByCode(token, code, maxPerCode)));
   const seen = /* @__PURE__ */ new Set();
   const all = [];
-  for (const code of ROME_CODES) {
-    const url = `${SEARCH_URL}?codeROME=${code}&range=0-${maxPerCode - 1}`;
-    try {
-      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) {
-        console.warn(`[ft] ${code} \u2192 ${res.status}`);
-        await new Promise((r) => setTimeout(r, 1100));
-        continue;
+  for (const batch of results) {
+    for (const job of batch) {
+      if (!seen.has(job.id)) {
+        seen.add(job.id);
+        all.push(job);
       }
-      const data = await res.json();
-      for (const job of data.resultats ?? []) {
-        if (!seen.has(job.id)) {
-          seen.add(job.id);
-          all.push(job);
-        }
-      }
-      await new Promise((r) => setTimeout(r, 1100));
-    } catch (err) {
-      console.error(`[ft] ${code} failed:`, err);
     }
   }
   console.log(`[ft] fetched ${all.length} unique jobs across ${ROME_CODES.length} ROME codes`);
   return all;
 }
 
+// server/lib/data-sources/city-to-region.ts
+var REGION_BY_PREFIX = [
+  // Île-de-France : Paris + petite/grande couronne
+  [/^(paris|île-de-france|ile-de-france|hauts-de-seine|seine-saint-denis|val-de-marne|val-d'oise|seine-et-marne|yvelines|essonne|courbevoie|nanterre|boulogne|levallois|neuilly|montreuil|saint-denis|saint-ouen|issy|clichy|puteaux|vincennes|aubervilliers|ivry|montrouge|rueil|versailles)/, "\xCEle-de-France"],
+  // Lyon / Rhône-Alpes
+  [/^(lyon|grenoble|saint-étienne|saint-etienne|villeurbanne|annecy|chambéry|chambery|valence|rhône-alpes|rhone-alpes|auvergne-rhône|auvergne-rhone)/, "Lyon/Rh\xF4ne-Alpes"],
+  // Bordeaux / Sud-Ouest
+  [/^(bordeaux|toulouse|pau|biarritz|bayonne|aquitaine|nouvelle-aquitaine|gironde|sud-ouest|landes)/, "Bordeaux/Sud-Ouest"],
+  // Marseille / PACA
+  [/^(marseille|aix-en-provence|aix|nice|cannes|antibes|toulon|provence|paca|côte d'azur|cote d'azur|monaco|sophia antipolis)/, "Marseille/PACA"],
+  // Lille / Nord
+  [/^(lille|roubaix|tourcoing|villeneuve-d'ascq|villeneuve|nord-pas-de-calais|hauts-de-france|amiens|nord)/, "Lille/Nord"],
+  // Nantes / Ouest
+  [/^(nantes|rennes|brest|angers|le mans|saint-nazaire|pays de la loire|bretagne|loire-atlantique|ouest)/, "Nantes/Ouest"],
+  // Toulouse — déjà capté par Sud-Ouest, mais on peut overrider explicit
+  // (laissé sous Bordeaux/Sud-Ouest pour rester proche de l'intuition produit)
+  // Remote / International / fallback
+  [/^(remote|télétravail|teletravail|home office|hybrid)/, "Remote France"],
+  [/^(london|berlin|munich|amsterdam|barcelona|madrid|brussels|bruxelles|geneva|genève|zurich|luxembourg|dublin|stockholm|copenhagen|copenhague|new york|san francisco|singapore|singapour|sydney|tokyo)/, "International"]
+];
+function cityToRegion(city) {
+  if (!city) return null;
+  const normalized = city.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  for (const [pattern, region] of REGION_BY_PREFIX) {
+    if (pattern.test(normalized)) return region;
+  }
+  return null;
+}
+
 // server/lib/data-sources/ingest.ts
 function slugify(s) {
   return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80);
 }
-async function findOrCreateCompany(name, city) {
-  const slug = slugify(name);
-  const [existing] = await db.select({ id: companies.id }).from(companies).where(eq7(companies.slug, slug)).limit(1);
-  if (existing) return existing.id;
-  const [row] = await db.insert(companies).values({ name, slug, city, dataSourcesUsed: [] }).onConflictDoNothing().returning({ id: companies.id });
+async function resolveCompany(input) {
+  const slug = slugify(input.name);
+  if (!slug) return null;
+  const region = cityToRegion(input.city);
+  const [existing] = await db.select({ id: companies.id, region: companies.region }).from(companies).where(eq7(companies.slug, slug)).limit(1);
+  if (existing) {
+    if (!existing.region && region) {
+      await db.update(companies).set({ region, lastUpdatedAt: /* @__PURE__ */ new Date() }).where(eq7(companies.id, existing.id));
+    }
+    return existing.id;
+  }
+  const [row] = await db.insert(companies).values({ name: input.name, slug, city: input.city, region, dataSourcesUsed: [] }).onConflictDoNothing().returning({ id: companies.id });
   if (row) return row.id;
   const [retry] = await db.select({ id: companies.id }).from(companies).where(eq7(companies.slug, slug)).limit(1);
-  if (!retry) throw new Error(`Failed to find/create company ${name}`);
-  return retry.id;
+  return retry?.id ?? null;
+}
+function fromAdzuna(j) {
+  const companyName = j.company.display_name?.trim();
+  if (!companyName) return null;
+  return {
+    source: "adzuna",
+    externalId: j.id,
+    companyName,
+    city: j.location?.area?.[2] ?? j.location?.display_name ?? null,
+    publishedAt: new Date(j.created),
+    title: j.title,
+    function: normalizeFunction(j.title),
+    level: normalizeLevel(j.title),
+    url: j.redirect_url,
+    rawData: j
+  };
+}
+function fromFranceTravail(j) {
+  const companyName = j.entreprise?.nom?.trim();
+  if (!companyName) return null;
+  return {
+    source: "france_travail",
+    externalId: j.id,
+    companyName,
+    city: j.lieuTravail?.commune ?? j.lieuTravail?.libelle ?? null,
+    publishedAt: new Date(j.dateCreation),
+    title: j.intitule,
+    function: normalizeFunction(j.intitule),
+    level: normalizeLevel(j.intitule),
+    url: j.origineOffre?.urlOrigine ?? `https://candidat.francetravail.fr/offres/recherche/detail/${j.id}`,
+    rawData: j
+  };
+}
+async function chunked(items, size, fn) {
+  const out = [];
+  for (let i = 0; i < items.length; i += size) {
+    const chunk = items.slice(i, i + size);
+    const results = await Promise.all(chunk.map(fn));
+    out.push(...results);
+  }
+  return out;
+}
+async function processBatch(items, stats) {
+  if (items.length === 0) return;
+  const source = items[0]?.source;
+  if (!source) return;
+  const uniqueByName = /* @__PURE__ */ new Map();
+  for (const it of items) {
+    const slug = slugify(it.companyName);
+    if (!slug) continue;
+    if (!uniqueByName.has(slug)) uniqueByName.set(slug, { name: it.companyName, city: it.city });
+  }
+  const slugs = [...uniqueByName.keys()];
+  const slugToId = /* @__PURE__ */ new Map();
+  await chunked(slugs, 10, async (slug) => {
+    const input = uniqueByName.get(slug);
+    if (!input) return;
+    const id = await resolveCompany(input);
+    if (id) {
+      slugToId.set(slug, id);
+      stats.companiesResolved++;
+    }
+  });
+  const externalIds = items.map((i) => i.externalId);
+  const existing = [];
+  for (let i = 0; i < externalIds.length; i += 200) {
+    const chunk = externalIds.slice(i, i + 200);
+    const rows = await db.select().from(jobs).where(and5(eq7(jobs.source, source), inArray3(jobs.externalId, chunk)));
+    existing.push(...rows);
+  }
+  const existingByExt = /* @__PURE__ */ new Map();
+  for (const e of existing) existingByExt.set(e.externalId, e);
+  const toInsert = [];
+  const toUpdate = [];
+  for (const it of items) {
+    const cid = slugToId.get(slugify(it.companyName));
+    if (!cid) {
+      stats.errors++;
+      continue;
+    }
+    const exist = existingByExt.get(it.externalId);
+    if (exist) {
+      if (it.publishedAt.getTime() > new Date(exist.publishedAt).getTime()) {
+        toUpdate.push({
+          id: exist.id,
+          publishedAt: it.publishedAt,
+          republicationCount: exist.republicationCount + 1
+        });
+      }
+      continue;
+    }
+    toInsert.push({
+      companyId: cid,
+      externalId: it.externalId,
+      source: it.source,
+      title: it.title,
+      function: it.function,
+      level: it.level,
+      city: it.city,
+      publishedAt: it.publishedAt,
+      url: it.url,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      rawData: it.rawData
+    });
+  }
+  for (let i = 0; i < toInsert.length; i += 100) {
+    const chunk = toInsert.slice(i, i + 100);
+    try {
+      await db.insert(jobs).values(chunk).onConflictDoNothing();
+      stats.added += chunk.length;
+    } catch (err) {
+      console.error("[ingest/bulk-insert] failed:", err);
+      stats.errors += chunk.length;
+    }
+  }
+  for (const u of toUpdate) {
+    try {
+      await db.update(jobs).set({ publishedAt: u.publishedAt, republicationCount: u.republicationCount, closedAt: null }).where(eq7(jobs.id, u.id));
+      stats.republished++;
+    } catch (err) {
+      console.error("[ingest/update] failed:", err);
+      stats.errors++;
+    }
+  }
 }
 async function ingestAll() {
-  const stats = { added: 0, republished: 0, errors: 0 };
-  try {
-    const adzunaJobs = await fetchAdzunaTechJobs(1);
-    for (const aj of adzunaJobs) {
-      try {
-        const companyName = aj.company.display_name?.trim();
-        if (!companyName) continue;
-        const city = aj.location?.area?.[2] ?? aj.location?.display_name ?? null;
-        const companyId = await findOrCreateCompany(companyName, city);
-        const publishedAt = new Date(aj.created);
-        const [existing] = await db.select().from(jobs).where(and5(eq7(jobs.source, "adzuna"), eq7(jobs.externalId, aj.id))).limit(1);
-        if (existing) {
-          if (publishedAt.getTime() > new Date(existing.publishedAt).getTime()) {
-            await db.update(jobs).set({ publishedAt, republicationCount: existing.republicationCount + 1, closedAt: null }).where(eq7(jobs.id, existing.id));
-            await db.insert(companyTimelineEvents).values({
-              companyId,
-              eventDate: publishedAt.toISOString().slice(0, 10),
-              eventType: "job_republished",
-              description: aj.title
-            });
-            stats.republished++;
-          }
-        } else {
-          await db.insert(jobs).values({
-            companyId,
-            externalId: aj.id,
-            source: "adzuna",
-            title: aj.title,
-            function: normalizeFunction(aj.title),
-            level: normalizeLevel(aj.title),
-            city,
-            publishedAt,
-            url: aj.redirect_url,
-            rawData: aj
-          });
-          await db.insert(companyTimelineEvents).values({
-            companyId,
-            eventDate: publishedAt.toISOString().slice(0, 10),
-            eventType: "job_published",
-            description: aj.title
-          });
-          stats.added++;
-        }
-      } catch (err) {
-        console.error("[ingest/adzuna] item failed:", err);
-        stats.errors++;
-      }
-    }
-  } catch (err) {
-    console.error("[ingest/adzuna] global failed:", err);
-  }
-  try {
-    const ftJobs = await fetchFranceTravailJobs(50);
-    for (const fj of ftJobs) {
-      try {
-        const companyName = fj.entreprise?.nom?.trim();
-        if (!companyName) continue;
-        const city = fj.lieuTravail?.commune ?? fj.lieuTravail?.libelle ?? null;
-        const companyId = await findOrCreateCompany(companyName, city);
-        const publishedAt = new Date(fj.dateCreation);
-        const [existing] = await db.select().from(jobs).where(and5(eq7(jobs.source, "france_travail"), eq7(jobs.externalId, fj.id))).limit(1);
-        if (existing) {
-          if (publishedAt.getTime() > new Date(existing.publishedAt).getTime()) {
-            await db.update(jobs).set({ publishedAt, republicationCount: existing.republicationCount + 1, closedAt: null }).where(eq7(jobs.id, existing.id));
-            stats.republished++;
-          }
-        } else {
-          await db.insert(jobs).values({
-            companyId,
-            externalId: fj.id,
-            source: "france_travail",
-            title: fj.intitule,
-            function: normalizeFunction(fj.intitule),
-            level: normalizeLevel(fj.intitule),
-            city,
-            publishedAt,
-            url: fj.origineOffre?.urlOrigine ?? `https://candidat.francetravail.fr/offres/recherche/detail/${fj.id}`,
-            rawData: fj
-          });
-          stats.added++;
-        }
-      } catch (err) {
-        console.error("[ingest/ft] item failed:", err);
-        stats.errors++;
-      }
-    }
-  } catch (err) {
-    console.error("[ingest/ft] global failed:", err);
-  }
+  const stats = {
+    added: 0,
+    republished: 0,
+    errors: 0,
+    companiesResolved: 0,
+    adzunaFetched: 0,
+    ftFetched: 0
+  };
+  const [adzunaJobs, ftJobs] = await Promise.all([
+    fetchAdzunaTechJobs(2).catch((err) => {
+      console.error("[ingest/adzuna] global failed:", err);
+      return [];
+    }),
+    fetchFranceTravailJobs(150).catch((err) => {
+      console.error("[ingest/ft] global failed:", err);
+      return [];
+    })
+  ]);
+  stats.adzunaFetched = adzunaJobs.length;
+  stats.ftFetched = ftJobs.length;
+  const adzunaNormalized = adzunaJobs.map(fromAdzuna).filter((x) => x !== null);
+  const ftNormalized = ftJobs.map(fromFranceTravail).filter((x) => x !== null);
+  await processBatch(adzunaNormalized, stats);
+  await processBatch(ftNormalized, stats);
   return stats;
+}
+async function backfillRegionsFromCity() {
+  const rows = await db.select({ id: companies.id, city: companies.city }).from(companies).where(isNull3(companies.region));
+  let updated = 0;
+  for (const r of rows) {
+    const region = cityToRegion(r.city);
+    if (region) {
+      await db.update(companies).set({ region, lastUpdatedAt: /* @__PURE__ */ new Date() }).where(eq7(companies.id, r.id));
+      updated++;
+    }
+  }
+  return { updated, total: rows.length };
 }
 async function recomputeAllScores() {
   const { computeScore: computeScore2, computeFlags: computeFlags2 } = await Promise.resolve().then(() => (init_scoring(), scoring_exports));
@@ -2010,6 +2132,16 @@ router9.post("/seed-reference-companies", async (req, res) => {
     res.json({ ok: true, ...stats });
   } catch (err) {
     console.error("[cron/seed] failed:", err);
+    res.status(500).json({ error: err instanceof Error ? err.message : "Failed" });
+  }
+});
+router9.post("/backfill-regions", async (req, res) => {
+  if (!authorize(req, res)) return;
+  try {
+    const stats = await backfillRegionsFromCity();
+    res.json({ ok: true, ...stats });
+  } catch (err) {
+    console.error("[cron/backfill-regions] failed:", err);
     res.status(500).json({ error: err instanceof Error ? err.message : "Failed" });
   }
 });
