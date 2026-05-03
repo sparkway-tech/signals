@@ -13,7 +13,7 @@
  * inférés à la volée par la fiche entreprise.
  */
 
-import { eq, and, inArray, isNull } from "drizzle-orm";
+import { eq, and, inArray, isNull, sql as dsql } from "drizzle-orm";
 import { db } from "@server/lib/db";
 import { companies, jobs, type Job, type JobSource } from "@shared/schema";
 import { fetchAdzunaTechJobs, normalizeFunction, normalizeLevel, type AdzunaJob } from "./adzuna";
@@ -291,10 +291,16 @@ export async function backfillRegionsFromCity(): Promise<{ updated: number; tota
 }
 
 /**
- * Recompute scores for all companies with at least 1 active job in last 90j.
+ * Recompute scores for all companies. Optimisé pour gérer >1000 boîtes
+ * en moins de 60s (limite Vercel Hobby).
+ *
+ * Stratégie :
+ *  - 1 query pour toutes les companies (id, fundingStage, lastFundingDate)
+ *  - 1 query pour TOUS les jobs (filtrés par companyId IN ...) en chunks
+ *  - Compute en mémoire
+ *  - Bulk upsert par chunks de 50
  */
-export async function recomputeAllScores(): Promise<{ scored: number }> {
-  // Import scoring lazily pour éviter circular
+export async function recomputeAllScores(): Promise<{ scored: number; skipped: number }> {
   const { computeScore, computeFlags } = await import("../scoring");
   const { companyScores } = await import("@shared/schema");
 
@@ -302,15 +308,34 @@ export async function recomputeAllScores(): Promise<{ scored: number }> {
     .select({ id: companies.id, fundingStage: companies.fundingStage, lastFundingDate: companies.lastFundingDate })
     .from(companies);
 
-  let scored = 0;
-  for (const c of allCompanies) {
-    const cJobs: Job[] = await db.select().from(jobs).where(eq(jobs.companyId, c.id));
-    if (cJobs.length === 0) continue;
+  if (allCompanies.length === 0) return { scored: 0, skipped: 0 };
 
+  // Bulk fetch all jobs grouped by companyId (chunks IN de 500)
+  const jobsByCompany = new Map<string, Job[]>();
+  const companyIds = allCompanies.map((c) => c.id);
+  for (let i = 0; i < companyIds.length; i += 500) {
+    const slice = companyIds.slice(i, i + 500);
+    const rows = await db.select().from(jobs).where(inArray(jobs.companyId, slice));
+    for (const j of rows) {
+      const arr = jobsByCompany.get(j.companyId) ?? [];
+      arr.push(j);
+      jobsByCompany.set(j.companyId, arr);
+    }
+  }
+
+  type ScoreRow = typeof companyScores.$inferInsert;
+  const rowsToUpsert: ScoreRow[] = [];
+  let skipped = 0;
+
+  for (const c of allCompanies) {
+    const cJobs = jobsByCompany.get(c.id) ?? [];
+    if (cJobs.length === 0) {
+      skipped++;
+      continue;
+    }
     const fundingMonths = c.lastFundingDate
       ? Math.floor((Date.now() - new Date(c.lastFundingDate).getTime()) / (30 * 86_400_000))
       : null;
-
     const scores = computeScore({ jobs: cJobs, fundingRecentMonths: fundingMonths });
     const flags = computeFlags({
       scores,
@@ -318,32 +343,38 @@ export async function recomputeAllScores(): Promise<{ scored: number }> {
       fundingRecentMonths: fundingMonths,
       fundingStage: c.fundingStage,
     });
+    rowsToUpsert.push({
+      companyId: c.id,
+      score: scores.score,
+      scoreVolume: scores.scoreVolume,
+      scorePersistance: scores.scorePersistance,
+      scoreRepublication: scores.scoreRepublication,
+      scoreCroissanceSales: scores.scoreCroissanceSales,
+      flags,
+    });
+  }
 
+  // Bulk upsert (Postgres ON CONFLICT DO UPDATE) par chunks de 50
+  let scored = 0;
+  for (let i = 0; i < rowsToUpsert.length; i += 50) {
+    const chunk = rowsToUpsert.slice(i, i + 50);
     await db
       .insert(companyScores)
-      .values({
-        companyId: c.id,
-        score: scores.score,
-        scoreVolume: scores.scoreVolume,
-        scorePersistance: scores.scorePersistance,
-        scoreRepublication: scores.scoreRepublication,
-        scoreCroissanceSales: scores.scoreCroissanceSales,
-        flags,
-      })
+      .values(chunk)
       .onConflictDoUpdate({
         target: companyScores.companyId,
         set: {
-          score: scores.score,
-          scoreVolume: scores.scoreVolume,
-          scorePersistance: scores.scorePersistance,
-          scoreRepublication: scores.scoreRepublication,
-          scoreCroissanceSales: scores.scoreCroissanceSales,
-          flags,
+          score: dsql`excluded.score`,
+          scoreVolume: dsql`excluded.score_volume`,
+          scorePersistance: dsql`excluded.score_persistance`,
+          scoreRepublication: dsql`excluded.score_republication`,
+          scoreCroissanceSales: dsql`excluded.score_croissance_sales`,
+          flags: dsql`excluded.flags`,
           computedAt: new Date(),
         },
       });
-    scored++;
+    scored += chunk.length;
   }
 
-  return { scored };
+  return { scored, skipped };
 }
